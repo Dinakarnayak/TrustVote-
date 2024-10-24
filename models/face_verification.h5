@@ -1,82 +1,70 @@
-// App.js (React frontend for voting and identity verification)
-import React, { useState } from 'react';
-import Web3 from 'web3';
-import VotingContract from './contracts/Voting.json';
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import EarlyStopping
 
-const App = () => {
-  const [account, setAccount] = useState('');
-  const [contract, setContract] = useState(null);
-  const [candidates, setCandidates] = useState([]);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [verified, setVerified] = useState(false);
+# Define the CNN model for face verification
+def create_face_verification_model(input_shape):
+    model = Sequential()
+    
+    # Convolutional layers
+    model.add(Conv2D(32, (3, 3), activation='relu', input_shape=input_shape))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
 
-  const loadBlockchainData = async () => {
-    const web3 = new Web3(Web3.givenProvider || 'http://localhost:7545');
-    const accounts = await web3.eth.requestAccounts();
-    setAccount(accounts[0]);
+    model.add(Conv2D(64, (3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
 
-    const networkId = await web3.eth.net.getId();
-    const networkData = VotingContract.networks[networkId];
-    if (networkData) {
-      const contractInstance = new web3.eth.Contract(VotingContract.abi, networkData.address);
-      setContract(contractInstance);
+    model.add(Conv2D(128, (3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
 
-      const candidateCount = await contractInstance.methods.candidatesCount().call();
-      const candidatesList = [];
-      for (let i = 0; i < candidateCount; i++) {
-        const candidate = await contractInstance.methods.candidates(i).call();
-        candidatesList.push(candidate);
-      }
-      setCandidates(candidatesList);
-    }
-  };
+    # Flatten the output and pass it through fully connected layers
+    model.add(Flatten())
+    model.add(Dense(128, activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(1, activation='sigmoid'))  # Binary classification (match/no match)
 
-  const handleFileUpload = (event) => {
-    setSelectedFile(event.target.files[0]);
-  };
+    # Compile the model
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    
+    return model
 
-  const verifyIdentity = async () => {
-    const formData = new FormData();
-    formData.append('file', selectedFile);
+# Define image input shape (64x64 images with 3 channels for RGB)
+input_shape = (64, 64, 3)
+model = create_face_verification_model(input_shape)
 
-    const response = await fetch('http://localhost:5000/verify', {
-      method: 'POST',
-      body: formData,
-    });
+# Print the model summary
+model.summary()
 
-    const data = await response.json();
-    setVerified(data.verified);
-  };
+# Set up data generators for training and validation
+train_datagen = ImageDataGenerator(rescale=1./255, horizontal_flip=True, zoom_range=0.2)
+val_datagen = ImageDataGenerator(rescale=1./255)
 
-  const vote = async (candidateId) => {
-    if (!verified) {
-      alert('Please verify your identity first!');
-      return;
-    }
+train_generator = train_datagen.flow_from_directory(
+    'data/train',  # Path to training images
+    target_size=(64, 64),
+    batch_size=32,
+    class_mode='binary'  # Match/No Match (binary classification)
+)
 
-    await contract.methods.vote(candidateId).send({ from: account });
-    alert('Vote cast successfully!');
-  };
+val_generator = val_datagen.flow_from_directory(
+    'data/validation',  # Path to validation images
+    target_size=(64, 64),
+    batch_size=32,
+    class_mode='binary'
+)
 
-  return (
-    <div>
-      <h1>TrustVote: Decentralized E-Voting</h1>
-      <div>
-        <input type="file" onChange={handleFileUpload} />
-        <button onClick={verifyIdentity}>Verify Identity</button>
-        {verified && <p>Identity Verified! You can now vote.</p>}
-      </div>
+# Set early stopping
+early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
-      <div>
-        <h2>Vote for a Candidate</h2>
-        {candidates.map((candidate, index) => (
-          <button key={index} onClick={() => vote(candidate.id)}>
-            {candidate.name}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-};
+# Train the model
+history = model.fit(
+    train_generator,
+    epochs=25,
+    validation_data=val_generator,
+    callbacks=[early_stopping]
+)
 
-export default App;
+# Save the trained model
+model.save('models/face_verification.h5')
+print("Model saved as face_verification.h5")
